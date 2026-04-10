@@ -1,0 +1,31 @@
+Checking for dataset...
+Data located at: /home/bryson/.cache/kagglehub/datasets/yasserh/instacart-online-grocery-basket-analysis-dataset/versions/1
+[LightGBM] [Info] Number of positive: 663059, number of negative: 9983303
+[LightGBM] [Info] Auto-choosing row-wise multi-threading, the overhead of testing was 0.143006 seconds.
+You can set `force_row_wise=true` to remove the overhead.
+And if memory is not enough, you can set `force_col_wise=true`.
+[LightGBM] [Info] Total Bins 223
+[LightGBM] [Info] Number of data points in the train set: 10646362, number of used features: 4
+[LightGBM] [Info] [binary:BoostFromScore]: pavg=0.062280 -> initscore=-2.711805
+[LightGBM] [Info] Start training from score -2.711805
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[LightGBM] [Warning] No further splits with positive gain, best gain: -inf
+[2026-04-10 22:24:53.612] [CUML] [warning] L-BFGS stopped, because the line search failed to advance (step delta = 0.000000)
+Model Scores:
+LGB: 0.7293
+XGB: 0.7293
+LR: 0.7053
+Best model: XGB with score: 0.7293

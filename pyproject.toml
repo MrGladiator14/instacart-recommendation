@@ -7,8 +7,8 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "kagglehub>=1.0.0",
     "lightgbm>=4.6.0",
-    "numpy>=2.4.4",
-    "pandas>=3.0.2",
+    "numpy<2.3.0",
+    "pandas<2.4.0",
     "scikit-learn>=1.8.0",
     "xgboost>=3.2.0",
     "fastapi>=0.115.0",
@@ -17,4 +17,6 @@ dependencies = [
     "ray[default,serve]>=2.30.0",
     "streamlit>=1.39.0",
     "requests>=2.32.0",
+    "cudf-cu13==26.2.*",
+    "cuml-cu13==26.2.*",
 ]
