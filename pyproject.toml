@@ -20,3 +20,9 @@ dependencies = [
     "cudf-cu13==26.2.*",
     "cuml-cu13==26.2.*",
 ]
+
+[tool.setuptools]
+py-modules = ["api_server", "streamlit_app", "train", "test_reorder_model"]
+
+[tool.setuptools.package-data]
+"*" = ["*.py", "*.pkl", "*.txt", "*.md"]

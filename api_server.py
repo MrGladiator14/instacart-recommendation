@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """
 FastAPI server with Ray Serve for Instacart reorder probability model
-Provides REST API endpoints for predictions with GPU acceleration
 """
 
 import os
 import logging
 import pickle
 import pandas as pd
-import numpy as np
-import argparse
-import sys
 from typing import Dict, Any, Optional
 from contextlib import asynccontextmanager
 
@@ -19,18 +15,11 @@ from pydantic import BaseModel, Field
 import uvicorn
 import ray
 from ray import serve
-from ray.serve import Deployment
-from ray.serve.handle import DeploymentHandle
-import warnings
-
-warnings.filterwarnings('ignore')
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-handle: Optional[DeploymentHandle] = None
-
-# Configure GPU based on environment
+handle: Optional[serve.DeploymentHandle] = None
 gpu_available = os.getenv("GPU_AVAILABLE", "false").lower() == "true"
 
 @serve.deployment(
@@ -49,37 +38,27 @@ class ReorderModelDeployment:
         self._load_model()
         self._load_sample_data()
     
-    def _load_model(self) -> bool:
+    def _load_model(self):
         try:
             with open(self.path, 'rb') as f:
                 self.model = pickle.load(f)
-            print(f"[SUCCESS] Model loaded from {self.path}")
-            return True
-        except FileNotFoundError:
-            print(f"[ERROR] Model file not found: {self.path}")
-            return False
+            logger.info(f"Model loaded from {self.path}")
         except Exception as e:
             logger.error(f"Failed to load model: {e}")
-            return False
+            raise
     
-    def _load_sample_data(self) -> bool:
+    def _load_sample_data(self):
         self.products = pd.DataFrame({
             'product_id': [1, 2, 3, 4, 5],
             'product_name': ['Banana', 'Milk', 'Bread', 'Eggs', 'Apple'],
             'department': ['produce', 'dairy eggs', 'bakery', 'dairy eggs', 'produce'],
             'aisle': ['fresh fruits', 'milk', 'bread', 'eggs', 'fresh fruits']
         })
-        return True
     
-    def _prepare_features(self, u: int, pid: int, pc: int, er: int) -> Optional[pd.DataFrame]:
-        if self.products is None:
-            print("[ERROR] Product info not loaded")
-            return None
-        
+    def _prepare_features(self, u: int, pid: int, pc: int, er: int) -> pd.DataFrame:
         product_data = self.products[self.products['product_id'] == pid]
         if product_data.empty:
-            logger.error(f"Product ID {pid} not found")
-            return None
+            raise ValueError(f"Product ID {pid} not found")
         
         product_row = product_data.iloc[0]
         
@@ -95,53 +74,28 @@ class ReorderModelDeployment:
         
         return features
     
-    async def predict_reorder_probability(self, u: int, pid: int, pc: int, er: int) -> Optional[float]:
-        if self.model is None:
-            logger.error("Model not loaded")
-            return None
-        
+    async def predict_reorder_probability(self, u: int, pid: int, pc: int, er: int) -> float:
         features = self._prepare_features(u, pid, pc, er)
-        if features is None:
-            return None
-        
-        try:
-            probability = self.model.predict_proba(features)[:, 1][0]
-            return probability
-        except Exception as e:
-            logger.error(f"Prediction failed: {e}")
-            return None
+        return self.model.predict_proba(features)[:, 1][0]
     
     async def get_products(self, limit: int = 20) -> Dict[str, Any]:
-        if self.products is None:
-            return {"products": [], "total_available": 0}
-        
         sample_products = self.products.head(limit)
         
-        products = []
-        for _, row in sample_products.iterrows():
-            products.append({
-                "product_id": int(row['product_id']),
-                "product_name": str(row['product_name']),
-                "department": str(row['department']),
-                "aisle": str(row['aisle'])
-            })
-        
         return {
-            "products": products,
+            "products": sample_products.to_dict('records'),
             "total_available": len(self.products)
         }
     
     async def health_check(self) -> Dict[str, Any]:
-        gpu_resources = ray.get_runtime_context().get_resource_ids().get("GPU", [])
         return {
             "model_loaded": self.model is not None,
             "data_loaded": self.products is not None,
-            "gpu_available": len(gpu_resources) > 0
+            "gpu_available": gpu_available
         }
 
 class PredictionRequest(BaseModel):
-    user_id: int = Field(..., description="User ID", example=12345)
-    product_id: int = Field(..., description="Product ID", example=24852)
+    user_id: int = Field(..., description="User ID", example=123)
+    product_id: int = Field(..., description="Product ID", example=1)
     purchases: int = Field(..., description="Number of times user purchased this product", example=3)
     reordered: int = Field(..., description="Whether user ever reordered this product (0 or 1)", example=1)
 
@@ -152,10 +106,6 @@ class PredictionResponse(BaseModel):
     interpretation: str
     status: str = "success"
 
-class HealthResponse(BaseModel):
-    status: str
-    model_loaded: bool
-    data_loaded: bool
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -206,31 +156,15 @@ async def root():
         }
     }
 
-@app.get("/health", response_model=HealthResponse)
+@app.get("/health")
 async def health_check():
-    global handle
-    
     if handle is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Model deployment not available"
         )
     
-    try:
-        deployment_health = await handle.health_check.remote()
-        
-        return HealthResponse(
-            status="healthy",
-            model_loaded=deployment_health["model_loaded"],
-            data_loaded=deployment_health["data_loaded"]
-        )
-        
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Health check failed: {str(e)}"
-        )
+    return await handle.health_check.remote()
 
 @app.post("/predict", response_model=PredictionResponse)
 async def predict_reorder(request: PredictionRequest):
@@ -256,18 +190,12 @@ async def predict_reorder(request: PredictionRequest):
             request.reordered
         )
         
-        if probability is None:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Prediction failed"
-            )
         
-        if probability > 0.7:
-            interpretation = "High likelihood of reorder"
-        elif probability > 0.4:
-            interpretation = "Moderate likelihood of reorder"
-        else:
-            interpretation = "Low likelihood of reorder"
+        interpretation = (
+            "High likelihood of reorder" if probability > 0.7 else
+            "Moderate likelihood of reorder" if probability > 0.4 else
+            "Low likelihood of reorder"
+        )
         
         return PredictionResponse(
             user_id=request.user_id,
@@ -277,32 +205,21 @@ async def predict_reorder(request: PredictionRequest):
         )
         
     except Exception as e:
-        logger.error(f"Prediction error: {str(e)}")
+        logger.error(f"Prediction error: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Prediction failed: {str(e)}"
+            detail="Prediction failed"
         )
 
-@app.get("/products", response_model=Dict[str, Any])
+@app.get("/products")
 async def get_products():
-    global handle
-    
     if handle is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Model deployment not available"
         )
     
-    try:
-        products_data = await handle.get_products.remote()
-        return products_data
-        
-    except Exception as e:
-        logger.error(f"Failed to get products: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Failed to get products: {str(e)}"
-        )
+    return await handle.get_products.remote()
 
 
 if __name__ == "__main__":
