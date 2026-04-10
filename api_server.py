@@ -42,6 +42,7 @@ class ReorderModelDeployment:
     """Ray Serve deployment for the reorder model"""
     
     def __init__(self, path: str = "production_models/lgbm_reorder_model.pkl"):
+        self.path = path
         self.categorical_cols = ['department', 'aisle']
         self.model = None
         self.products = None
@@ -164,7 +165,7 @@ async def lifespan(app: FastAPI):
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
         
-        serve.start(http_options={"host": "0.0.0.0", "port": 8000})
+        serve.start(http_options={"host": "127.0.0.1", "port": 8001})
         
         path = os.getenv("MODEL_PATH", "production_models/lgbm_reorder_model.pkl")
         model_deployment = ReorderModelDeployment.bind(path)
