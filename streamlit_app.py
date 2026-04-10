@@ -142,14 +142,14 @@ def render_sidebar():
                 st.session_state.model_predictor = ModelPredictor(url)
                 health = st.session_state.model_predictor.health_check()
                 if health["api_connected"]:
-                    st.sidebar.success("✅ API connected successfully!")
+                    st.sidebar.success("API connected successfully!")
                     st.rerun()
                 else:
-                    st.sidebar.error(f"❌ Connection failed: {health.get('error_message', 'Unknown error')}")
+                    st.sidebar.error(f"Connection failed: {health.get('error_message', 'Unknown error')}")
             except ValueError as e:
-                st.sidebar.error(f"❌ Invalid URL: {e}")
+                st.sidebar.error(f"Invalid URL: {e}")
             except Exception as e:
-                st.sidebar.error(f"❌ Failed to connect: {e}")
+                st.sidebar.error(f"Failed to connect: {e}")
     
     if 'model_predictor' in st.session_state:
         with st.sidebar:
