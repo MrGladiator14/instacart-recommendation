@@ -41,7 +41,7 @@ gpu_available = os.getenv("GPU_AVAILABLE", "false").lower() == "true"
 class ReorderModelDeployment:
     """Ray Serve deployment for the reorder model"""
     
-    def __init__(self, path: str = "production_models/lgbm_reorder_model.pkl"):
+    def __init__(self, path: str = "production_models/xgb_reorder_model.pkl"):
         self.path = path
         self.categorical_cols = ['department', 'aisle']
         self.model = None
@@ -167,7 +167,7 @@ async def lifespan(app: FastAPI):
         
         serve.start(http_options={"host": "127.0.0.1", "port": 8001})
         
-        path = os.getenv("MODEL_PATH", "production_models/lgbm_reorder_model.pkl")
+        path = os.getenv("MODEL_PATH", "production_models/xgb_reorder_model.pkl")
         model_deployment = ReorderModelDeployment.bind(path)
         serve.run(model_deployment, name="reorder-model-app")
         

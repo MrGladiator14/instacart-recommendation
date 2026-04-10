@@ -16,7 +16,7 @@ warnings.filterwarnings('ignore')
 class ReorderModelTester:
     """Test class for reorder probability model"""
     
-    def __init__(self, path: str = "production_models/lgbm_reorder_model.pkl"):
+    def __init__(self, path: str = "production_models/xgb_reorder_model.pkl"):
         self.path = path
         self.model = None
         self.products = None
