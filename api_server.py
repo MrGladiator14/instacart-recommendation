@@ -30,10 +30,13 @@ logger = logging.getLogger(__name__)
 
 handle: Optional[DeploymentHandle] = None
 
+# Configure GPU based on environment
+gpu_available = os.getenv("GPU_AVAILABLE", "false").lower() == "true"
+
 @serve.deployment(
     name="reorder-model",
     num_replicas=1,
-    ray_actor_options={"num_gpus": 1},
+    ray_actor_options={"num_gpus": 1} if gpu_available else {},
 )
 class ReorderModelDeployment:
     """Ray Serve deployment for the reorder model"""
@@ -161,7 +164,7 @@ async def lifespan(app: FastAPI):
         if not ray.is_initialized():
             ray.init(ignore_reinit_error=True)
         
-        serve.start(http_options={"host": "0.0.0.0", "port": 8001})
+        serve.start(http_options={"host": "0.0.0.0", "port": 8000})
         
         path = os.getenv("MODEL_PATH", "production_models/lgbm_reorder_model.pkl")
         model_deployment = ReorderModelDeployment.bind(path)

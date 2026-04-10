@@ -42,9 +42,14 @@ jobs:
         fi
         
     - name: Start API server
+      env:
+        GPU_AVAILABLE: false
       run: |
-        python api_server.py &
-        sleep 10
+        python api_server.py > server.log 2>&1 &
+        echo "Server started, waiting for initialization..."
+        sleep 20
+        echo "Checking if server is responding..."
+        curl -f http://localhost:8000/health || (echo "Server failed to start:" && cat server.log && exit 1)
         
     - name: Test API connection
       run: |
