@@ -19,7 +19,7 @@ from ray import serve
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-handle: Optional[serve.DeploymentHandle] = None
+handle = None
 gpu_available = os.getenv("GPU_AVAILABLE", "false").lower() == "true"
 
 @serve.deployment(
