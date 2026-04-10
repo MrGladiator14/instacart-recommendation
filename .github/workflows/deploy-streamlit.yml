@@ -60,14 +60,4 @@ jobs:
       with:
         app-file: streamlit_app.py
         python-version: '3.12'
-        dependencies-file: pyproject.toml
-      env:
-        STREAMLIT_SERVER_PORT: 8501
-        STREAMLIT_SERVER_ADDRESS: localhost
-        API_BASE_URL: http://localhost:8000
-        
-    - name: Run Streamlit app locally (for testing)
-      run: |
-        streamlit run streamlit_app.py --server.port 8501 --server.address 0.0.0.0 &
-        sleep 5
-        curl -f http://localhost:8501 || echo "Streamlit app started successfully"
+        dependencies-file: requirements.txt
