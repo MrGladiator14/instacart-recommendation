@@ -32,6 +32,13 @@ jobs:
         pip install -e .
         pip install streamlit
         
+    - name: Optimize network settings
+      run: |
+        sudo sysctl -w net.core.rmem_max=16777216
+        sudo sysctl -w net.core.rmem_default=16777216
+        sudo sysctl -w net.core.wmem_max=16777216
+        sudo sysctl -w net.core.wmem_default=16777216
+        
     - name: Verify model exists
       run: |
         if [ ! -f "production_models/lgbm_reorder_model.pkl" ]; then
