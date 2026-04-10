@@ -1,0 +1,73 @@
+name: Run Reorder Predictor
+
+on:
+  workflow_dispatch:
+    inputs:
+      user_id:
+        description: 'User ID'
+        required: true
+        type: number
+      product_id:
+        description: 'Product ID'
+        required: true
+        type: number
+      purchase_count:
+        description: 'Number of times user purchased this product'
+        required: true
+        type: number
+      ever_reordered:
+        description: 'Whether user ever reordered this product (0 or 1)'
+        required: true
+        type: choice
+        options:
+          - '0'
+          - '1'
+      model_path:
+        description: 'Path to trained model'
+        required: false
+        type: string
+        default: 'production_models/lgbm_reorder_model.pkl'
+
+jobs:
+  run-predictor:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+        
+    - name: Cache pip dependencies
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('**/pyproject.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+          
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+        
+    - name: Verify model exists
+      run: |
+        if [ ! -f "${{ github.event.inputs.model_path }}" ]; then
+          echo "Error: Model file not found at ${{ github.event.inputs.model_path }}"
+          echo "Available files in production_models/:"
+          ls -la production_models/ || echo "production_models directory not found"
+          exit 1
+        fi
+        
+    - name: Run reorder predictor
+      run: |
+        python reorder_predictor.py \
+          --user_id ${{ github.event.inputs.user_id }} \
+          --product_id ${{ github.event.inputs.product_id }} \
+          --purchase_count ${{ github.event.inputs.purchase_count }} \
+          --ever_reordered ${{ github.event.inputs.ever_reordered }} \
+          --model_path "${{ github.event.inputs.model_path }}"

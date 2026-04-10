@@ -1,3 +1,6 @@
+```bash
+uv run python reorder_predictor.py --user_id 123 --product_id 1 --purchase_count 5 --ever_reordered 1
+```
 
 ### **Data Loading**
 
