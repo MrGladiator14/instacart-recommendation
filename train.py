@@ -15,23 +15,23 @@ try:
     import kagglehub
     from kagglehub import KaggleDatasetAdapter
     print("Checking for dataset...")
-    data_dir = kagglehub.dataset_download("yasserh/instacart-online-grocery-basket-analysis-dataset")
-    print(f"Data located at: {data_dir}")
+    d = kagglehub.dataset_download("yasserh/instacart-online-grocery-basket-analysis-dataset")
+    print(f"Data located at: {d}")
 except ImportError:
     raise RuntimeError("Please install kagglehub: pip install kagglehub")
 
-prior_path = os.path.join(data_dir, "order_products__prior.csv")
-train_path = os.path.join(data_dir, "order_products__train.csv")
-orders_path = os.path.join(data_dir, "orders.csv")
-products_path = os.path.join(data_dir, "products.csv")
-aisles_path = os.path.join(data_dir, "aisles.csv")
-depts_path = os.path.join(data_dir, "departments.csv")
+p = os.path.join(d, "order_products__prior.csv")
+t = os.path.join(d, "order_products__train.csv")
+o = os.path.join(d, "orders.csv")
+pr = os.path.join(d, "products.csv")
+a = os.path.join(d, "aisles.csv")
+dept = os.path.join(d, "departments.csv")
 
 print("Loading core lookup tables...")
-products_df = pd.read_csv(products_path)
-aisles_df = pd.read_csv(aisles_path)
-departments_df = pd.read_csv(depts_path)
-orders_df = pd.read_csv(orders_path, usecols=['order_id', 'user_id', 'order_dow', 'order_hour_of_day', 'days_since_prior_order'])
+products_df = pd.read_csv(pr)
+aisles_df = pd.read_csv(a)
+departments_df = pd.read_csv(dept)
+orders_df = pd.read_csv(o, usecols=['order_id', 'user_id', 'order_dow', 'order_hour_of_day', 'days_since_prior_order'])
 
 product_info = products_df.merge(aisles_df, on='aisle_id').merge(departments_df, on='department_id')
 
@@ -70,8 +70,8 @@ def process_orders_in_chunks(filepath, chunk_size=250_000):
     gc.collect()
     return final_agg
 
-prior_features = process_orders_in_chunks(prior_path)
-train_features = process_orders_in_chunks(train_path)
+prior_features = process_orders_in_chunks(p)
+train_features = process_orders_in_chunks(t)
 
 print("Creating target variables...")
 train_features = train_features[['user_id', 'product_id', 'ever_reordered']].rename(

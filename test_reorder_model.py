@@ -16,31 +16,28 @@ warnings.filterwarnings('ignore')
 class ReorderModelTester:
     """Test class for reorder probability model"""
     
-    def __init__(self, model_path: str = "production_models/lgbm_reorder_model.pkl"):
-        self.model_path = model_path
+    def __init__(self, path: str = "production_models/lgbm_reorder_model.pkl"):
+        self.path = path
         self.model = None
-        self.product_info = None
-        self.categorical_cols = ['department', 'aisle']
-        self.numerical_cols = ['purchase_count', 'ever_reordered']
+        self.products = None
+        self.cat_cols = ['department', 'aisle']
+        self.num_cols = ['purchase_count', 'ever_reordered']
         
     def load_model(self) -> bool:
-        """Load the trained model"""
         try:
-            with open(self.model_path, 'rb') as f:
+            with open(self.path, 'rb') as f:
                 self.model = pickle.load(f)
-            print(f"[SUCCESS] Model loaded from {self.model_path}")
+            print(f"[SUCCESS] Model loaded from {self.path}")
             return True
         except FileNotFoundError:
-            print(f"[ERROR] Model file not found: {self.model_path}")
+            print(f"[ERROR] Model file not found: {self.path}")
             return False
         except Exception as e:
             print(f"[ERROR] Failed to load model: {e}")
             return False
     
     def load_sample_data(self) -> bool:
-        """Load sample product data for testing"""
         try:
-            # Try to load from the original data source
             import kagglehub
             from kagglehub import KaggleDatasetAdapter
             
@@ -53,14 +50,13 @@ class ReorderModelTester:
             aisles_df = pd.read_csv(aisles_path)
             departments_df = pd.read_csv(depts_path)
             
-            self.product_info = products_df.merge(aisles_df, on='aisle_id').merge(departments_df, on='department_id')
-            print(f"[SUCCESS] Loaded {len(self.product_info)} products")
+            self.products = products_df.merge(aisles_df, on='aisle_id').merge(departments_df, on='department_id')
+            print(f"[SUCCESS] Loaded {len(self.products)} products")
             return True
             
         except Exception as e:
             print(f"[WARNING] Could not load sample data: {e}")
-            # Create minimal sample data for testing
-            self.product_info = pd.DataFrame({
+            self.products = pd.DataFrame({
                 'product_id': [1, 2, 3, 4, 5],
                 'product_name': ['Banana', 'Milk', 'Bread', 'Eggs', 'Apple'],
                 'department': ['produce', 'dairy eggs', 'bakery', 'dairy eggs', 'produce'],
@@ -69,41 +65,36 @@ class ReorderModelTester:
             print("[INFO] Using minimal sample data for testing")
             return True
     
-    def prepare_features(self, user_id: int, product_id: int, purchase_count: int, ever_reordered: int) -> Optional[pd.DataFrame]:
-        """Prepare features for a user-product pair"""
-        if self.product_info is None:
+    def prepare_features(self, uid: int, pid: int, pc: int, er: int) -> Optional[pd.DataFrame]:
+        if self.products is None:
             print("[ERROR] Product info not loaded")
             return None
         
-        # Get product metadata
-        product_data = self.product_info[self.product_info['product_id'] == product_id]
+        product_data = self.products[self.products['product_id'] == pid]
         if product_data.empty:
-            print(f"[ERROR] Product ID {product_id} not found")
+            print(f"[ERROR] Product ID {pid} not found")
             return None
         
         product_row = product_data.iloc[0]
         
-        # Create feature DataFrame
         features = pd.DataFrame({
-            'purchase_count': [purchase_count],
-            'ever_reordered': [ever_reordered],
+            'purchase_count': [pc],
+            'ever_reordered': [er],
             'department': [product_row['department']],
             'aisle': [product_row['aisle']]
         })
         
-        # Convert categorical columns to category type
-        for col in self.categorical_cols:
+        for col in self.cat_cols:
             features[col] = features[col].astype('category')
         
         return features
     
-    def predict_reorder_probability(self, user_id: int, product_id: int, purchase_count: int, ever_reordered: int) -> Optional[float]:
-        """Predict reorder probability for a user-product pair"""
+    def predict_reorder_probability(self, uid: int, pid: int, pc: int, er: int) -> Optional[float]:
         if self.model is None:
             print("[ERROR] Model not loaded")
             return None
         
-        features = self.prepare_features(user_id, product_id, purchase_count, ever_reordered)
+        features = self.prepare_features(uid, pid, pc, er)
         if features is None:
             return None
         
@@ -115,62 +106,57 @@ class ReorderModelTester:
             return None
     
     def generate_test_cases(self) -> List[Dict]:
-        """Generate diverse test cases"""
-        if self.product_info is None:
+        if self.products is None:
             return []
         
-        test_cases = []
+        cases = []
         
-        # Get sample products from different departments
         sample_products = []
-        if len(self.product_info) > 0:
-            for dept in self.product_info['department'].unique()[:5]:
-                dept_products = self.product_info[self.product_info['department'] == dept]
+        if len(self.products) > 0:
+            for dept in self.products['department'].unique()[:5]:
+                dept_products = self.products[self.products['department'] == dept]
                 if not dept_products.empty:
                     sample_products.append(dept_products.iloc[0])
         
-        # Create test scenarios
         scenarios = [
-            {"name": "First-time buyer", "purchase_count": 1, "ever_reordered": 0},
-            {"name": "Regular customer", "purchase_count": 5, "ever_reordered": 1},
-            {"name": "Very loyal customer", "purchase_count": 15, "ever_reordered": 1},
-            {"name": "One-time purchaser", "purchase_count": 1, "ever_reordered": 0},
-            {"name": "Occasional buyer", "purchase_count": 3, "ever_reordered": 0},
+            {"name": "First-time buyer", "pc": 1, "er": 0},
+            {"name": "Regular customer", "pc": 5, "er": 1},
+            {"name": "Very loyal customer", "pc": 15, "er": 1},
+            {"name": "One-time purchaser", "pc": 1, "er": 0},
+            {"name": "Occasional buyer", "pc": 3, "er": 0},
         ]
         
         for i, product in enumerate(sample_products[:5]):
             for scenario in scenarios:
-                test_cases.append({
+                cases.append({
                     "user_id": 1000 + i,
                     "product_id": int(product['product_id']),
                     "product_name": product['product_name'],
                     "department": product['department'],
                     "aisle": product['aisle'],
-                    "purchase_count": scenario["purchase_count"],
-                    "ever_reordered": scenario["ever_reordered"],
+                    "purchase_count": scenario["pc"],
+                    "ever_reordered": scenario["er"],
                     "scenario": scenario["name"]
                 })
         
-        return test_cases
+        return cases
     
-    def run_single_test(self, test_case: Dict) -> Dict:
-        """Run a single test case"""
-        result = test_case.copy()
+    def run_single_test(self, case: Dict) -> Dict:
+        result = case.copy()
         
-        probability = self.predict_reorder_probability(
-            test_case['user_id'],
-            test_case['product_id'],
-            test_case['purchase_count'],
-            test_case['ever_reordered']
+        prob = self.predict_reorder_probability(
+            case['user_id'],
+            case['product_id'],
+            case['purchase_count'],
+            case['ever_reordered']
         )
         
-        result['predicted_probability'] = probability
-        result['status'] = 'success' if probability is not None else 'failed'
+        result['predicted_probability'] = prob
+        result['status'] = 'success' if prob is not None else 'failed'
         
         return result
     
     def run_all_tests(self) -> List[Dict]:
-        """Run all test cases"""
         print("Running Reorder Probability Model Tests")
         print("=" * 60)
         
@@ -180,43 +166,41 @@ class ReorderModelTester:
         if not self.load_sample_data():
             return []
         
-        test_cases = self.generate_test_cases()
-        if not test_cases:
+        cases = self.generate_test_cases()
+        if not cases:
             print("[ERROR] No test cases generated")
             return []
         
         results = []
         
-        for i, test_case in enumerate(test_cases, 1):
-            print(f"\nTest {i}: {test_case['scenario']} - {test_case['product_name']}")
+        for i, case in enumerate(cases, 1):
+            print(f"\nTest {i}: {case['scenario']} - {case['product_name']}")
             print("-" * 50)
-            print(f"User ID: {test_case['user_id']}")
-            print(f"Product: {test_case['product_name']} ({test_case['department']})")
-            print(f"Purchase Count: {test_case['purchase_count']}")
-            print(f"Ever Reordered: {test_case['ever_reordered']}")
+            print(f"User ID: {case['user_id']}")
+            print(f"Product: {case['product_name']} ({case['department']})")
+            print(f"Purchase Count: {case['purchase_count']}")
+            print(f"Ever Reordered: {case['ever_reordered']}")
             
-            result = self.run_single_test(test_case)
+            result = self.run_single_test(case)
             results.append(result)
             
             if result['status'] == 'success':
                 prob = result['predicted_probability']
                 print(f"Reorder Probability: {prob:.4f} ({prob*100:.2f}%)")
                 
-                # Interpret probability
                 if prob > 0.7:
-                    interpretation = "High likelihood of reorder"
+                    interp = "High likelihood of reorder"
                 elif prob > 0.4:
-                    interpretation = "Moderate likelihood of reorder"
+                    interp = "Moderate likelihood of reorder"
                 else:
-                    interpretation = "Low likelihood of reorder"
-                print(f"Interpretation: {interpretation}")
+                    interp = "Low likelihood of reorder"
+                print(f"Interpretation: {interp}")
             else:
                 print("Status: FAILED")
         
         return results
     
     def interactive_test(self):
-        """Interactive testing mode"""
         print("\nInteractive Reorder Probability Testing")
         print("=" * 40)
         
@@ -243,17 +227,15 @@ class ReorderModelTester:
                 if ever_reordered.lower() == 'quit':
                     break
                 
-                # Convert to appropriate types
-                user_id = int(user_id)
-                product_id = int(product_id)
-                purchase_count = int(purchase_count)
-                ever_reordered = int(ever_reordered)
+                uid = int(user_id)
+                pid = int(product_id)
+                pc = int(purchase_count)
+                er = int(ever_reordered)
                 
-                # Make prediction
-                probability = self.predict_reorder_probability(user_id, product_id, purchase_count, ever_reordered)
+                prob = self.predict_reorder_probability(uid, pid, pc, er)
                 
-                if probability is not None:
-                    print(f"\nReorder Probability: {probability:.4f} ({probability*100:.2f}%)")
+                if prob is not None:
+                    print(f"\nReorder Probability: {prob:.4f} ({prob*100:.2f}%)")
                 else:
                     print("Prediction failed!")
                     
@@ -264,7 +246,6 @@ class ReorderModelTester:
                 break
     
     def print_summary(self, results: List[Dict]):
-        """Print test summary"""
         print("\n" + "=" * 60)
         print("Test Summary")
         print("=" * 60)
@@ -282,24 +263,20 @@ class ReorderModelTester:
         print(f"Success rate: {successful/len(results)*100:.1f}%")
         
         if successful > 0:
-            probabilities = [r['predicted_probability'] for r in results if r['status'] == 'success']
+            probs = [r['predicted_probability'] for r in results if r['status'] == 'success']
             print(f"\nProbability Statistics:")
-            print(f"Mean: {np.mean(probabilities):.4f}")
-            print(f"Min: {np.min(probabilities):.4f}")
-            print(f"Max: {np.max(probabilities):.4f}")
-            print(f"Std: {np.std(probabilities):.4f}")
+            print(f"Mean: {np.mean(probs):.4f}")
+            print(f"Min: {np.min(probs):.4f}")
+            print(f"Max: {np.max(probs):.4f}")
+            print(f"Std: {np.std(probs):.4f}")
 
 def main():
-    """Main function"""
     tester = ReorderModelTester()
     
-    # Run automated tests
     results = tester.run_all_tests()
     
-    # Print summary
     tester.print_summary(results)
     
-    # Offer interactive mode
     if results:
         choice = input("\nRun interactive tests? (y/n): ").strip().lower()
         if choice == 'y':

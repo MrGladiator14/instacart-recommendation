@@ -1,41 +1,45 @@
+# Instacart Product Reorder Prediction
+
+ML pipeline to predict product reorder probability using LightGBM.
+
+## Quick Start
+
 ```bash
-uv run python reorder_predictor.py --user_id 123 --product_id 1 --purchase_count 5 --ever_reordered 1
+# Install dependencies
+uv sync
+
+# Run API server (default: http://localhost:8000)
+uv run api_server.py
+
+# Or with uvicorn options
+uv run uvicorn api_server:app --host 0.0.0.0 --port 8000 --reload
+
+# Test prediction
+uv run python api_server.py --user_id 123 --product_id 1 --purchase_count 5 --ever_reordered 1
 ```
 
-### **Data Loading**
+## Deployment
 
-The pipeline starts by fetching the Instacart dataset through Kaggle Hub, loading five core CSV files: order products (prior and training), orders metadata, products, aisles, and departments. These are merged to create a unified product information table.
+```bash
+# Install cloudflared
+wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+sudo dpkg -i cloudflared-linux-amd64.deb
 
-### **Feature Engineering**
+# Expose local server
+cloudflared tunnel --url http://localhost:8000
+```
 
-Three key features are extracted:
+## Pipeline Overview
 
-* **purchase_count** : How many times a user has purchased a specific product from prior orders
-* **ever_reordered** : Maximum reorder flag indicating if a product was ever reordered (0 or 1)
-* **Categorical metadata** : Department and aisle names associated with each product
+**Data**: Instacart dataset (orders, products, aisles, departments)
 
-The target variable (`target_reordered`) is extracted from the training set to indicate whether a product was reordered in the training period.
+**Features**: 
+- `purchase_count`: User's purchase frequency for product
+- `ever_reordered`: Historical reorder flag  
+- `department`, `aisle`: Categorical metadata
 
-### **Preprocessing**
+**Model**: LightGBM classifier (binary: reordered/not reordered)
 
-* **Categorical preprocessing** : Department and aisle columns are encoded (typically one-hot encoding)
-* **Numerical preprocessing** : purchase_count and ever_reordered are standardized/scaled
-* **Train-test split** : 80/20 stratified split on the target variable to maintain class balance
+**Metrics**: ROC-AUC, precision, recall, F1-score
 
-### **Model Training**
-
-LightGBM classifier is trained with:
-
-* **Objective** : Binary classification (reordered vs. not reordered)
-* **Key hyperparameters** : learning_rate=0.1, max_depth=8, num_leaves=64, n_estimators=150
-* **Early stopping** : Stops after 20 rounds without improvement
-* **Metric** : AUC (ROC-AUC for binary classification)
-* **Class imbalance handling** : `is_unbalance=True` to handle skewed class distribution
-
-### **Evaluation & Export**
-
-Model performance is evaluated using:
-
-* **ROC-AUC Score** : Primary metric for ranking prediction quality
-* **Classification Report** : Precision, recall, F1-score per class
-* **Model persistence** : Trained model is saved as a pickle file for production deployment
+**Output**: Pickled model for production inference
