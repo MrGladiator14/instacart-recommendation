@@ -41,7 +41,7 @@ jobs:
         
     - name: Verify model exists
       run: |
-        if [ ! -f "production_models/lgbm_reorder_model.pkl" ]; then
+        if [ ! -f "production_models/xgb_reorder_model.pkl" ]; then
           echo "Error: Model file not found"
           echo "Available files in production_models/:"
           ls -la production_models/ || echo "production_models directory not found"
