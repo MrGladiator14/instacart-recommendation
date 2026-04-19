@@ -59,8 +59,10 @@ products.set_index('product_id', drop=False, inplace=True)
 del prods
  
 print('add order info to priors')
-orders.set_index('order_id', inplace=True, drop=False)
-priors = priors.join(orders, on='order_id', rsuffix='_')
+# orders.set_index('order_id', inplace=True, drop=False)
+orders.set_index('order_id', inplace=True, drop=True)
+orders['order_id'] = orders.index
+priors = priors.join(orders, on='order_id', rsuffix='_')  
 priors.drop('order_id_', inplace=True, axis=1)
 
 
@@ -126,7 +128,9 @@ def build_absolute_timeline(orders):
     counter per user, so we can compute real intervals between purchases.
     """
     print('building absolute day timeline...')
-    orders_sorted = orders.sort_values(['user_id', 'order_number']).copy()
+    # orders_sorted = orders.sort_values(['user_id', 'order_number']).copy()
+    orders_sorted = orders.reset_index(drop=True).sort_values(['user_id', 'order_number']).copy()
+    orders_sorted['order_id'] = orders_sorted.index
     orders_sorted['days_since_prior_order'] = orders_sorted['days_since_prior_order'].fillna(0)
     orders_sorted['abs_day'] = orders_sorted.groupby('user_id')['days_since_prior_order'].cumsum()
     return orders_sorted
@@ -143,11 +147,18 @@ def build_userproduct_temporal_features(priors, orders_sorted):
     print('building temporal user-product features...')
  
     # merge absolute day into priors
+    # priors_with_day = priors.merge(
+    #     orders_sorted[['order_id', 'abs_day']],
+    #     on='order_id',
+    #     how='left'
+    # )
+
     priors_with_day = priors.merge(
-        orders_sorted[['order_id', 'abs_day']],
-        on='order_id',
-        how='left'
-    )
+    orders_sorted[['abs_day']],
+    left_on='order_id',
+    right_index=True,
+    how='left'
+)
  
     # sort to get purchase sequence per user-product
     priors_with_day = priors_with_day.sort_values(['user_id', 'product_id', 'order_number'])
@@ -227,19 +238,30 @@ def build_prediction_features(user_ids, target_day_offset,
     df['UP_interval_progress'] = df['UP_days_since_last'] / (df['UP_avg_interval'] + 1e-5)
  
     # ── product-level features ─────────────────────────────────────────────
+    # df = df.merge(
+    #     products[['product_id', 'aisle_id', 'department_id',
+    #                'orders', 'reorders', 'reorder_rate']],
+    #     on='product_id', how='left'
+    # )
+    products_reset = products.reset_index(drop=True)
     df = df.merge(
-        products[['product_id', 'aisle_id', 'department_id',
-                   'orders', 'reorders', 'reorder_rate']],
-        on='product_id', how='left'
-    )
+    products_reset[['product_id', 'aisle_id', 'department_id',
+                    'orders', 'reorders', 'reorder_rate']],
+    on='product_id', how='left')
  
     # ── user-level features ────────────────────────────────────────────────
+    # users_reset = users.reset_index()
+    # df = df.merge(
+    #     users_reset[['user_id', 'total_items', 'total_distinct_items',
+    #                  'average_days_between_orders', 'average_basket', 'nb_orders']],
+    #     on='user_id', how='left'
+    # )
+    users.index.name = 'user_id'
     users_reset = users.reset_index()
     df = df.merge(
-        users_reset[['user_id', 'total_items', 'total_distinct_items',
-                     'average_days_between_orders', 'average_basket', 'nb_orders']],
-        on='user_id', how='left'
-    )
+    users_reset[['user_id', 'total_items', 'total_distinct_items',
+                 'average_days_between_orders', 'average_basket', 'nb_orders']],
+    on='user_id', how='left')
  
     # target day context — lets model learn day-specific patterns
     df['target_day_offset'] = target_day_offset
@@ -257,10 +279,15 @@ def build_training_data(train_orders, train,
     print('building training data...')
  
     # attach absolute day to each train order
+    # train_orders = train_orders.merge(
+    #     orders_sorted[['order_id', 'abs_day']],
+    #     on='order_id', how='left'
+    # )
     train_orders = train_orders.merge(
-        orders_sorted[['order_id', 'abs_day']],
-        on='order_id', how='left'
-    )
+    orders_sorted[['abs_day']],
+    left_on='order_id',
+    right_index=True,
+    how='left')
  
     all_dfs = []
  
@@ -471,7 +498,8 @@ for row in df_test.itertuples():
         except KeyError:
             d[row.order_id] = str(row.product_id)
  
-for order in test_orders.order_id:
+# for order in test_orders.order_id:
+for order in test_orders.index: 
     if order not in d:
         d[order] = 'None'
  
