@@ -44,7 +44,28 @@ products = pd.read_csv(IDIR + 'products.csv', dtype={
         'aisle_id': np.uint8,
         'department_id': np.uint8},
         usecols=['product_id', 'aisle_id', 'department_id'])
- 
+
+# ── NLP INSERT 1: Load extra text sources needed for NLP features ─────────────
+# We load product_name and aisle separately so we never touch the products
+# DataFrame the rest of the pipeline already depends on (same usecols, same
+# dtypes above are left entirely unchanged).
+
+print('loading product names for NLP features')
+# Re-read products.csv to get product_name only — kept in a separate frame
+# so the existing products load contract (usecols) is not broken.
+products_text = pd.read_csv(
+    IDIR + 'products.csv',
+    usecols=['product_id', 'product_name'],
+    dtype={'product_id': np.uint16, 'product_name': str}
+)
+
+print('loading aisles for NLP features')
+aisles = pd.read_csv(
+    IDIR + 'aisles.csv',
+    dtype={'aisle_id': np.uint8, 'aisle': str}
+)
+# ─────────────────────────────────────────────────────────────────────────────
+
 print('priors {}: {}'.format(priors.shape, ', '.join(priors.columns)))
 print('orders {}: {}'.format(orders.shape, ', '.join(orders.columns)))
 print('train {}: {}'.format(train.shape, ', '.join(train.columns)))
@@ -62,7 +83,101 @@ prods['reorder_rate'] = (prods.reorders / prods.orders).astype(np.float32)
 products = products.join(prods, on='product_id')
 products.set_index('product_id', drop=False, inplace=True)
 del prods
- 
+
+# ── NLP INSERT 2: Compute NLP features and merge into products ────────────────
+#
+# All three features are computed once over the product/aisle catalogue and
+# joined by product_id.  Zero per-row inference cost at prediction time.
+#
+print('computing NLP features')
+
+# ── NLP Feature 1: product_name_word_count ────────────────────────────────────
+# Hypothesis: Longer, more descriptive product names (e.g. "Organic Free-Range
+# Large Brown Eggs 12 ct") signal specialty or niche items.  Buyers of such
+# items tend to be brand-loyal and repeat-purchase at higher rates than buyers
+# of generic, short-named commodities ("Eggs").  Word count is a free, O(N)
+# proxy for product specificity with no vocabulary assumption.
+products_text['product_name_clean'] = (
+    products_text['product_name']
+    .fillna('')
+    .str.lower()
+    .str.strip()
+)
+products_text['product_name_word_count'] = (
+    products_text['product_name_clean']
+    .apply(lambda x: len(x.split()))          # simple whitespace tokenisation
+    .astype(np.int16)
+)
+
+# ── NLP Feature 2: is_health_organic ─────────────────────────────────────────
+# Hypothesis: Health-conscious and organic-oriented shoppers are among the most
+# loyal repeat buyers on Instacart (widely observed in public competition
+# kernels). A binary flag for health/organic keywords captures this buyer
+# segment directly without any embedding overhead.  The keyword list covers the
+# most predictive tokens while staying fast and interpretable.
+HEALTH_KEYWORDS = re.compile(
+    r'\b(organic|natural|gluten.free|vegan|non.gmo|free.range|'
+    r'whole.grain|raw|plant.based|dairy.free|sugar.free|'
+    r'hormone.free|antibiotic.free|sprouted|probiotic)\b',
+    re.IGNORECASE
+)
+products_text['is_health_organic'] = (
+    products_text['product_name_clean']
+    .str.contains(HEALTH_KEYWORDS)
+    .astype(np.int8)
+)
+
+# ── NLP Feature 3: aisle_tfidf_score ─────────────────────────────────────────
+# Hypothesis: Aisles whose names contain rare, distinctive tokens
+# (e.g. "kombucha", "refrigerated", "specialty") describe niche categories
+# with high repeat-buyer affinity; generic aisles ("beverages", "snacks") have
+# lower category loyalty.  We fit a TF-IDF on the 134 Instacart aisle names
+# and take each aisle's max TF-IDF weight as its "vocabulary distinctiveness"
+# score — a single scalar per aisle, no per-row overhead.
+tfidf = TfidfVectorizer(
+    analyzer='word',
+    ngram_range=(1, 2),   # uni+bigrams capture compound aisle names
+    sublinear_tf=True,    # dampen frequency explosions
+    min_df=1
+)
+aisle_tfidf_matrix = tfidf.fit_transform(aisles['aisle'].fillna(''))
+# max TF-IDF weight across all tokens → one scalar per aisle
+aisles['aisle_tfidf_score'] = (
+    np.asarray(aisle_tfidf_matrix.max(axis=1)).flatten().astype(np.float32)
+)
+
+# Join aisle_tfidf_score onto products_text via aisle_id
+# We use the main products frame (which already has aisle_id) as the bridge.
+products_text = products_text.merge(
+    products[['product_id', 'aisle_id']].reset_index(drop=True),
+    on='product_id',
+    how='left'
+)
+products_text = products_text.merge(
+    aisles[['aisle_id', 'aisle_tfidf_score']],
+    on='aisle_id',
+    how='left'
+)
+
+# Combine the three NLP features into one lightweight frame keyed on product_id
+nlp_features = products_text[[
+    'product_id',
+    'product_name_word_count',   # Feature 1
+    'is_health_organic',         # Feature 2
+    'aisle_tfidf_score',         # Feature 3
+]].set_index('product_id')
+
+# Join NLP features into the main products DataFrame (products is already
+# indexed by product_id, so a direct join works without disrupting any
+# downstream code that reads products by index).
+products = products.join(nlp_features, on='product_id')
+
+del products_text, aisles, nlp_features, tfidf, aisle_tfidf_matrix
+print('NLP features added to products:', ['product_name_word_count',
+                                           'is_health_organic',
+                                           'aisle_tfidf_score'])
+# ─────────────────────────────────────────────────────────────────────────────
+
 print('add order info to priors')
 # orders.set_index('order_id', inplace=True, drop=False)
 orders.set_index('order_id', inplace=True, drop=True)
@@ -117,7 +232,6 @@ userXproduct.nb_orders = userXproduct.nb_orders.astype(np.int16)
 userXproduct.last_order_id = userXproduct.last_order_id.map(lambda x: x[1]).astype(np.int32)
 userXproduct.sum_pos_in_cart = userXproduct.sum_pos_in_cart.astype(np.int16)
 print('user x product features count:', len(userXproduct))
-
 
 
 
