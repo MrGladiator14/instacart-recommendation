@@ -341,7 +341,7 @@ def build_prediction_features(user_ids, target_day_offset,
     df['target_abs_day'] = df['user_last_abs_day'] + target_day_offset
  
     # ── core temporal signals ──────────────────────────────────────────────
- 
+
     # raw days since this product was last bought
     df['UP_days_since_last'] = df['target_abs_day'] - df['UP_last_abs_day']
  
@@ -365,7 +365,17 @@ def build_prediction_features(user_ids, target_day_offset,
     products_reset = products.reset_index(drop=True)
     df = df.merge(
     products_reset[['product_id', 'aisle_id', 'department_id',
-                    'orders', 'reorders', 'reorder_rate']],
+                    'orders', 'reorders', 'reorder_rate',
+                    # ── NLP INSERT 3: expose NLP columns through the products
+                    # merge so they flow into every feature frame produced by
+                    # this function (training, test, live prediction).
+                    # Only these three column names are added; the rest of
+                    # the merge logic is untouched. ─────────────────────────
+                    'product_name_word_count',  # NLP Feature 1
+                    'is_health_organic',        # NLP Feature 2
+                    'aisle_tfidf_score',        # NLP Feature 3
+                    # ─────────────────────────────────────────────────────
+                    ]],
     on='product_id', how='left')
  
     # ── user-level features ────────────────────────────────────────────────
@@ -454,8 +464,6 @@ def build_training_data(train_orders, train,
  
 
 
-
-
  # SECTION 6: Features List
 
  
@@ -481,7 +489,16 @@ FEATURES = [
     'reorder_rate',
     'aisle_id',
     'department_id',
- 
+
+    # ── NLP INSERT 4: register NLP features so they are picked up by every
+    # lgb.Dataset, bst.predict(), and submission call downstream.
+    # No other code in the pipeline needs to change — FEATURES is the
+    # single source of truth for the model's input columns. ─────────────────
+    'product_name_word_count',  # NLP Feature 1: product specificity proxy
+    'is_health_organic',        # NLP Feature 2: health/organic buyer segment
+    'aisle_tfidf_score',        # NLP Feature 3: aisle vocabulary distinctiveness
+    # ─────────────────────────────────────────────────────────────────────────
+
     # ── target day context ──
     'target_day_offset',        # days from now being predicted
 ]
