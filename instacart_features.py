@@ -1,7 +1,12 @@
 import numpy as np
 import pandas as pd
 import lightgbm as lgb
- 
+
+# ── NLP imports (lightweight only — no transformers or large embeddings) ──────
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+# ─────────────────────────────────────────────────────────────────────────────
+
 IDIR = '../input/'
  
 
