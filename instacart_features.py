@@ -306,3 +306,194 @@ def build_training_data(train_orders, train,
  
     return pd.concat(all_dfs, ignore_index=True)
  
+
+
+
+
+ # SECTION 6: Features List
+
+ 
+FEATURES = [
+    # ── temporal signals (core of day-level prediction) ──
+    'UP_days_since_last',       # raw days since last bought
+    'UP_days_overdue',          # how late past expected interval
+    'UP_overdue_zscore',        # normalized overdue (accounts for habit consistency)
+    'UP_interval_progress',     # 0.5=halfway, 1.0=due, 2.0=very overdue
+    'UP_avg_interval',          # user's average reorder cycle for this product
+    'UP_std_interval',          # consistency of buying habit
+    'UP_min_interval',
+    'UP_max_interval',
+    'UP_purchase_count',        # total times ever purchased
+ 
+    # ── user signals ──
+    'nb_orders',
+    'average_days_between_orders',
+    'average_basket',
+    'total_distinct_items',
+ 
+    # ── product signals ──
+    'reorder_rate',
+    'aisle_id',
+    'department_id',
+ 
+    # ── target day context ──
+    'target_day_offset',        # days from now being predicted
+]
+ 
+ 
+
+#Train / Test Split
+
+ 
+print('splitting orders: train, test')
+test_orders  = orders[orders.eval_set == 'test']
+train_orders = orders[orders.eval_set == 'train']
+ 
+train.set_index(['order_id', 'product_id'], inplace=True, drop=False)
+ 
+ 
+
+# SECTION 8: Build Temporal Features
+
+ 
+orders_sorted = build_absolute_timeline(orders)
+up_temporal   = build_userproduct_temporal_features(priors, orders_sorted)
+user_timeline = build_user_timeline(orders_sorted)
+ 
+ 
+
+#Build Training Data & Train Model
+
+ 
+df_train = build_training_data(
+    train_orders, train,
+    up_temporal, user_timeline,
+    users, products, orders_sorted
+)
+ 
+print('training LightGBM model...')
+X = df_train[FEATURES]
+y = df_train['label']
+ 
+d_train = lgb.Dataset(
+    X, label=y,
+    categorical_feature=['aisle_id', 'department_id']
+)
+ 
+params = {
+    'boosting_type'   : 'gbdt',
+    'objective'       : 'binary',
+    'metric'          : 'binary_logloss',
+    'num_leaves'      : 64,
+    'max_depth'       : 8,
+    'learning_rate'   : 0.05,
+    'feature_fraction': 0.8,
+    'bagging_fraction': 0.9,
+    'bagging_freq'    : 5,
+    'min_child_samples': 20,
+    'verbose'         : -1
+}
+ 
+bst = lgb.train(params, d_train, num_boost_round=200)
+del d_train
+ 
+ 
+
+#Predict — User ID + Target Day → Reorder Probability
+
+ 
+def predict_for_user_on_day(user_id, target_day_offset, bst,
+                             up_temporal, user_timeline,
+                             users, products, top_k=10):
+    """
+    Given a user_id and target_day_offset (days from their last known order),
+    returns all their products ranked by reorder probability.
+ 
+    Example
+    -------
+    predict_for_user_on_day(user_id=1, target_day_offset=7, ...)
+    → "What will user 1 likely reorder 7 days from now?"
+    """
+    df = build_prediction_features(
+        user_ids=[user_id],
+        target_day_offset=target_day_offset,
+        up_temporal=up_temporal,
+        user_timeline=user_timeline,
+        users=users,
+        products=products
+    )
+ 
+    df['reorder_probability'] = bst.predict(df[FEATURES])
+ 
+    result = df[['user_id', 'product_id', 'reorder_probability',
+                  'UP_days_since_last', 'UP_avg_interval',
+                  'UP_interval_progress']].copy()
+    result = result.sort_values('reorder_probability', ascending=False)
+ 
+    print(f"\nTop {top_k} products for user {user_id} on day +{target_day_offset}:")
+    print(result.head(top_k).to_string(index=False))
+    return result
+ 
+ 
+
+#Generate Test Submission
+#(predict for all test users, 0 days offset = their next order day)
+
+ 
+print('generating predictions for test users...')
+THRESHOLD = 0.22
+ 
+test_user_ids = test_orders['user_id'].unique().tolist()
+ 
+df_test = build_prediction_features(
+    user_ids=test_user_ids,
+    target_day_offset=0,        # predicting for their immediate next order
+    up_temporal=up_temporal,
+    user_timeline=user_timeline,
+    users=users,
+    products=products
+)
+ 
+df_test = df_test.merge(
+    test_orders[['user_id', 'order_id']],
+    on='user_id', how='left'
+)
+ 
+print('predicting...')
+df_test['reorder_probability'] = bst.predict(df_test[FEATURES])
+ 
+# build submission
+d = dict()
+for row in df_test.itertuples():
+    if row.reorder_probability > THRESHOLD:
+        try:
+            d[row.order_id] += ' ' + str(row.product_id)
+        except KeyError:
+            d[row.order_id] = str(row.product_id)
+ 
+for order in test_orders.order_id:
+    if order not in d:
+        d[order] = 'None'
+ 
+sub = pd.DataFrame.from_dict(d, orient='index')
+sub.reset_index(inplace=True)
+sub.columns = ['order_id', 'products']
+sub.to_csv('sub.csv', index=False)
+print('submission saved to sub.csv')
+ 
+ 
+
+#Example Usage
+
+ 
+
+results = predict_for_user_on_day(
+    user_id=1,
+    target_day_offset=7,        
+    bst=bst,
+    up_temporal=up_temporal,
+    user_timeline=user_timeline,
+    users=users,
+    products=products,
+    top_k=10
+)
