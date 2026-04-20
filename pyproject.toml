@@ -19,6 +19,8 @@ dependencies = [
     "requests>=2.32.0",
     "cudf-cu13==26.2.*",
     "cuml-cu13==26.2.*",
+    "cupy-cuda13x>=14.0.1",
+    "psutil>=7.2.2",
 ]
 
 [tool.setuptools]

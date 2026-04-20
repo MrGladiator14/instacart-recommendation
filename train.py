@@ -10,134 +10,146 @@ import xgboost as xgb
 from sklearn.linear_model import LogisticRegression as SKLogisticRegression
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, classification_report
+from sklearn.metrics import f1_score, classification_report, roc_auc_score
 import pickle
 import warnings
 
 warnings.filterwarnings('ignore')
 
-try:
-    import kagglehub
-    from kagglehub import KaggleDatasetAdapter
-    print("Checking for dataset...")
-    d = kagglehub.dataset_download("yasserh/instacart-online-grocery-basket-analysis-dataset")
-    print(f"Data located at: {d}")
-except ImportError:
-    raise RuntimeError("Please install kagglehub: pip install kagglehub")
+print("Loading train features...")
+train_features = pd.read_csv('features/scaled_train_features.csv')
+print(f"Train features shape: {train_features.shape}")
 
-p = os.path.join(d, "order_products__prior.csv")
-t = os.path.join(d, "order_products__train.csv")
-o = os.path.join(d, "orders.csv")
-pr = os.path.join(d, "products.csv")
-a = os.path.join(d, "aisles.csv")
-dept = os.path.join(d, "departments.csv")
+print("Preparing features for training...")
 
-products_df = pd.read_csv(pr)
-aisles_df = pd.read_csv(a)
-departments_df = pd.read_csv(dept)
-orders_df = pd.read_csv(o, usecols=['order_id', 'user_id', 'order_dow', 'order_hour_of_day', 'days_since_prior_order'])
+feature_cols = [col for col in train_features.columns if col not in ['label', 'user_id', 'product_id', 'order_id', 'department_id']]
+print(f"Feature columns: {feature_cols}")
 
-product_info = products_df.merge(aisles_df, on='aisle_id').merge(departments_df, on='department_id')
+cat_cols = ['aisle_id']
+num_cols = [col for col in feature_cols if col not in cat_cols]
 
-del products_df, aisles_df, departments_df
-gc.collect()
+print(f"Categorical columns: {cat_cols}")
+print(f"Numerical columns: {num_cols}")
 
-def process_orders_in_chunks(filepath, chunk_size=250_000):
-    chunks = []
-    
-    for chunk in pd.read_csv(filepath, chunksize=chunk_size, usecols=['order_id', 'product_id', 'reordered']):
-        chunk = chunk.merge(orders_df[['order_id', 'user_id']], on='order_id', how='inner')
-        
-        chunk['user_id'] = pd.to_numeric(chunk['user_id'], downcast='integer')
-        chunk['product_id'] = pd.to_numeric(chunk['product_id'], downcast='integer')
-        chunk['reordered'] = pd.to_numeric(chunk['reordered'], downcast='integer')
-        
-        agg_chunk = chunk.groupby(['user_id', 'product_id']).agg(
-            purchase_count=('order_id', 'count'),
-            ever_reordered=('reordered', 'max')
-        ).reset_index()
-        
-        chunks.append(agg_chunk)
-        del chunk
-        gc.collect()
-        
-    combined = pd.concat(chunks, ignore_index=True)
-    
-    final_agg = combined.groupby(['user_id', 'product_id']).agg(
-        purchase_count=('purchase_count', 'sum'),
-        ever_reordered=('ever_reordered', 'max')
-    ).reset_index()
-    
-    del combined, chunks
-    gc.collect()
-    return final_agg
+X = train_features[feature_cols].copy()
+y = train_features['label']
 
-prior_features = process_orders_in_chunks(p)
-train_features = process_orders_in_chunks(t)
+y = (y > 0).astype(int)
 
-train_features = train_features[['user_id', 'product_id', 'ever_reordered']].rename(
-    columns={'ever_reordered': 'target_reordered'}
-)
+print(f"Target unique values after conversion: {sorted(y.unique())}")
+print(f"Target value counts after conversion: {y.value_counts()}")
 
-features_df = prior_features.merge(train_features, on=['user_id', 'product_id'], how='left')
-features_df['target_reordered'] = features_df['target_reordered'].fillna(0).astype('int8')
-
-del prior_features, train_features
-gc.collect()
-
-features_df = features_df.merge(product_info[['product_id', 'department', 'aisle']], on='product_id', how='inner')
-
-cat_cols = ['department', 'aisle']
-num_cols = ['purchase_count', 'ever_reordered']
+for col in num_cols:
+    X[col] = X[col].fillna(X[col].median())
 
 for col in cat_cols:
-    features_df[col] = features_df[col].astype('category')
+    X[col] = X[col].fillna(-1).astype('int32')
 
-X = features_df[num_cols + cat_cols]
-y = features_df['target_reordered']
+for col in cat_cols:
+    X[col] = X[col].astype('category')
 
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.1, random_state=42, stratify=y)
 
-del features_df, X, y
+print(f"Training set shape: {X_train.shape}")
+print(f"Test set shape: {X_test.shape}")
+print(f"Target distribution - Train: {y_train.mean():.4f}, Test: {y_test.mean():.4f}")
+
+del X, y
 gc.collect()
 
 def train_models(X_train, X_test, y_train, y_test, cat_cols):
     models = {}
     scores = {}
     
+    from sklearn.utils.class_weight import compute_class_weight
+    class_weights = compute_class_weight('balanced', classes=np.unique(y_train), y=y_train)
+    weight_dict = dict(zip(np.unique(y_train), class_weights))
+    print(f"Class weights: {weight_dict}")
+    print(f"Class distribution - Train: {np.bincount(y_train)}, Test: {np.bincount(y_test)}")
+    
     lgb_params = {
         'objective': 'binary',
-        'metric': 'auc',
-        'learning_rate': 0.1,
+        'metric': 'binary_logloss',
+        'learning_rate': 0.01,
         'max_depth': 8,
         'num_leaves': 64,
-        'is_unbalance': True,
+        'feature_fraction': 0.7,
+        'bagging_fraction': 0.7,
+        'bagging_freq': 5,
+        'min_child_samples': 20,
+        'reg_alpha': 0.1,
+        'reg_lambda': 0.1,
+        'scale_pos_weight': weight_dict[1] / weight_dict[0],
         'random_state': 42,
-        'n_jobs': -1
+        'n_jobs': -1,
+        'verbose': -1,
+        'device': 'gpu'
     }
     
-    lgb_model = lgb.LGBMClassifier(**lgb_params, n_estimators=150)
-    lgb_model.fit(X_train, y_train)
-    lgb_pred = lgb_model.predict_proba(X_test)[:, 1]
-    lgb_score = roc_auc_score(y_test, lgb_pred)
+    print("Training LightGBM model...")
+    lgb_model = lgb.LGBMClassifier(**lgb_params, n_estimators=10000)
+    lgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)], eval_metric='binary_logloss', 
+                  callbacks=[lgb.early_stopping(100), lgb.log_evaluation(200)])
+    
+    lgb_proba = lgb_model.predict_proba(X_test)[:, 1]
+    thresholds = np.arange(0.1, 0.9, 0.05)
+    best_threshold = 0.5
+    best_f1 = 0
+    
+    for threshold in thresholds:
+        lgb_pred = (lgb_proba >= threshold).astype(int)
+        current_f1 = f1_score(y_test, lgb_pred, average='macro')
+        if current_f1 > best_f1:
+            best_f1 = current_f1
+            best_threshold = threshold
+    
+    lgb_pred_final = (lgb_proba >= best_threshold).astype(int)
+    lgb_score = f1_score(y_test, lgb_pred_final, average='macro')
     models['lgb'] = lgb_model
     scores['lgb'] = lgb_score
+    print(f"LightGBM Macro F1: {lgb_score:.4f} (threshold: {best_threshold:.3f})")
     
+    print("Training XGBoost model...")
     xgb_model = xgb.XGBClassifier(
         objective='binary:logistic',
-        learning_rate=0.1,
+        learning_rate=0.01,
         max_depth=8,
-        n_estimators=150,
+        n_estimators=10000,
+        subsample=0.7,
+        colsample_bytree=0.7,
+        min_child_weight=1,
+        gamma=0.1,
+        reg_alpha=0.1,
+        reg_lambda=0.1,
+        scale_pos_weight=weight_dict[1] / weight_dict[0],
         random_state=42,
         n_jobs=-1,
-        enable_categorical=True
+        enable_categorical=True,
+        eval_metric='logloss',
+        early_stopping_rounds=100,
+        verbose=-1,
+        device='gpu'
     )
-    xgb_model.fit(X_train, y_train)
-    xgb_pred = xgb_model.predict_proba(X_test)[:, 1]
-    xgb_score = roc_auc_score(y_test, xgb_pred)
+    xgb_model.fit(X_train, y_train, eval_set=[(X_test, y_test)])
+    
+    xgb_proba = xgb_model.predict_proba(X_test)[:, 1]
+    best_threshold_xgb = 0.5
+    best_f1_xgb = 0
+    
+    for threshold in thresholds:
+        xgb_pred = (xgb_proba >= threshold).astype(int)
+        current_f1 = f1_score(y_test, xgb_pred, average='macro')
+        if current_f1 > best_f1_xgb:
+            best_f1_xgb = current_f1
+            best_threshold_xgb = threshold
+    
+    xgb_pred_final = (xgb_proba >= best_threshold_xgb).astype(int)
+    xgb_score = f1_score(y_test, xgb_pred_final, average='macro')
     models['xgb'] = xgb_model
     scores['xgb'] = xgb_score
+    print(f"XGBoost Macro F1: {xgb_score:.4f} (threshold: {best_threshold_xgb:.3f})")
     
+    print("Training Logistic Regression model...")
     X_train_encoded = X_train.copy()
     X_test_encoded = X_test.copy()
     
@@ -146,26 +158,89 @@ def train_models(X_train, X_test, y_train, y_test, cat_cols):
         X_train_encoded[col] = le.fit_transform(X_train_encoded[col].astype('str'))
         X_test_encoded[col] = le.transform(X_test_encoded[col].astype('str'))
     
-    lr_model = SKLogisticRegression(random_state=42, max_iter=1000, n_jobs=-1)
+    lr_model = SKLogisticRegression(
+        random_state=42, 
+        max_iter=10000, 
+        n_jobs=-1, 
+        C=0.1,
+        class_weight='balanced'
+    )
     lr_model.fit(X_train_encoded, y_train)
-    lr_pred = lr_model.predict_proba(X_test_encoded)[:, 1]
-    lr_score = roc_auc_score(y_test, lr_pred)
+    
+    lr_proba = lr_model.predict_proba(X_test_encoded)[:, 1]
+    best_threshold_lr = 0.5
+    best_f1_lr = 0
+    
+    for threshold in thresholds:
+        lr_pred = (lr_proba >= threshold).astype(int)
+        current_f1 = f1_score(y_test, lr_pred, average='macro')
+        if current_f1 > best_f1_lr:
+            best_f1_lr = current_f1
+            best_threshold_lr = threshold
+    
+    lr_pred_final = (lr_proba >= best_threshold_lr).astype(int)
+    lr_score = f1_score(y_test, lr_pred_final, average='macro')
     models['lr'] = lr_model
     scores['lr'] = lr_score
+    print(f"Logistic Regression Macro F1: {lr_score:.4f} (threshold: {best_threshold_lr:.3f})")
     
     return models, scores
 
 models, scores = train_models(X_train, X_test, y_train, y_test, cat_cols)
 
-print("Model Scores:")
+print("\nFinal Model Scores:")
 for name, score in scores.items():
     print(f"{name.upper()}: {score:.4f}")
 
 best_model_name = max(scores, key=scores.get)
 best_model = models[best_model_name]
 
+print(f"\nBest model: {best_model_name.upper()} with score: {scores[best_model_name]:.4f}")
+
 os.makedirs('production_models', exist_ok=True)
 with open(f'production_models/{best_model_name}_reorder_model.pkl', 'wb') as f:
     pickle.dump(best_model, f)
+print(f"Best model saved as: production_models/{best_model_name}_reorder_model.pkl")
 
-print(f"Best model: {best_model_name.upper()} with score: {scores[best_model_name]:.4f}")
+print(f"\n=== Final Evaluation Results ===")
+print(f"Best Model: {best_model_name.upper()}")
+print(f"Validation Macro F1: {scores[best_model_name]:.4f}")
+
+if best_model_name == 'lgb':
+    val_pred = best_model.predict_proba(X_test)[:, 1]
+elif best_model_name == 'xgb':
+    val_pred = best_model.predict_proba(X_test)[:, 1]
+else:  # lr
+    X_test_encoded = X_test.copy()
+    for col in cat_cols:
+        le = LabelEncoder()
+        X_test_encoded[col] = le.fit_transform(X_test_encoded[col].astype('str'))
+    val_pred = best_model.predict_proba(X_test_encoded)[:, 1]
+
+thresholds = np.arange(0.1, 0.9, 0.05)
+best_threshold_final = 0.5
+best_f1_final = 0
+
+for threshold in thresholds:
+    val_pred_binary = (val_pred >= threshold).astype(int)
+    current_f1 = f1_score(y_test, val_pred_binary, average='macro')
+    if current_f1 > best_f1_final:
+        best_f1_final = current_f1
+        best_threshold_final = threshold
+
+val_pred_binary_final = (val_pred >= best_threshold_final).astype(int)
+
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score, classification_report
+
+print(f"\nFinal Validation Metrics (threshold: {best_threshold_final:.3f}):")
+print(f"Validation Macro F1: {f1_score(y_test, val_pred_binary_final, average='macro'):.4f}")
+print(f"Validation Accuracy: {accuracy_score(y_test, val_pred_binary_final):.4f}")
+print(f"Validation Precision: {precision_score(y_test, val_pred_binary_final, average='binary'):.4f}")
+print(f"Validation Recall: {recall_score(y_test, val_pred_binary_final, average='binary'):.4f}")
+print(f"Validation Binary F1: {f1_score(y_test, val_pred_binary_final, average='binary'):.4f}")
+print(f"Prediction Distribution - Mean: {val_pred.mean():.4f}, Std: {val_pred.std():.4f}")
+
+print(f"\nDetailed Classification Report:")
+print(classification_report(y_test, val_pred_binary_final))
+
+print("\nTraining completed successfully!")

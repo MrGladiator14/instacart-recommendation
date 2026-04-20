@@ -1,7 +1,3 @@
-"""
-Utility functions for the Instacart recommendation system.
-"""
-
 import os
 from typing import Dict, Any
 

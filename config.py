@@ -1,28 +1,20 @@
-"""
-Configuration module for Instacart recommendation system.
-"""
-
 from typing import Dict, Any
 
 
 class Config:
     """Configuration class for the Instacart recommendation system."""
     
-    # Model configuration
     MODEL_PATH = 'production_models/xgb_reorder_model.pkl'
     PROBABILITY_THRESHOLD = 0.2
     
-    # Dataset configuration
     DATASET_NAME = "yasserh/instacart-online-grocery-basket-analysis-dataset"
     
     # Output configuration
     DEFAULT_OUTPUT_PATH = 'stock.csv'
     
-    # Feature columns
     NUMERICAL_FEATURES = ['purchase_count', 'ever_reordered']
     CATEGORICAL_FEATURES = ['department', 'aisle']
     
-    # Data processing
     PREDICTION_BATCH_SIZE = 100_000
     
     @classmethod

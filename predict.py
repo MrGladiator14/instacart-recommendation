@@ -22,7 +22,6 @@ warnings.filterwarnings('ignore')
 
 
 class InstacartPredictor:
-    """Class for handling Instacart reorder predictions."""
     
     def __init__(self, model_path: str = None, probability_threshold: float = None, use_gpu: bool = True):
         """
@@ -42,7 +41,6 @@ class InstacartPredictor:
         self.orders_df = None
         
     def load_model(self) -> None:
-        """Load the pre-trained model."""
         validate_file_path(self.model_path)
         
         try:
@@ -73,100 +71,42 @@ class InstacartPredictor:
             print(f"Model loaded from {self.model_path} (CPU mode - GPU fallback failed)")
     
     def load_data(self) -> None:
-        """Load necessary data files."""
         data_config = Config.get_data_config()
         d = kagglehub.dataset_download(data_config['dataset_name'])
         
         if self.use_gpu:
             products_df = cudf.read_csv(os.path.join(d, "products.csv"))
-            aisles_df = cudf.read_csv(os.path.join(d, "aisles.csv"))
-            departments_df = cudf.read_csv(os.path.join(d, "departments.csv"))
+            self.product_info = products_df[['product_id', 'product_name']]
             
-            self.product_info = products_df.merge(aisles_df, on='aisle_id').merge(
-                departments_df, on='department_id'
-            )
+            orders_df = cudf.read_csv(os.path.join(d, "orders.csv"))
+            self.test_orders = orders_df[orders_df['eval_set'] == 'test'][['order_id', 'user_id']]
             
-            self.orders_df = cudf.read_csv(
-                os.path.join(d, "orders.csv"),
-                usecols=['order_id', 'user_id', 'order_dow', 'order_hour_of_day', 'days_since_prior_order']
-            )
             print("Data loaded successfully (GPU mode)")
         else:
             products_df = pd.read_csv(os.path.join(d, "products.csv"))
-            aisles_df = pd.read_csv(os.path.join(d, "aisles.csv"))
-            departments_df = pd.read_csv(os.path.join(d, "departments.csv"))
+            self.product_info = products_df[['product_id', 'product_name']]
             
-            self.product_info = products_df.merge(aisles_df, on='aisle_id').merge(
-                departments_df, on='department_id'
-            )
+            orders_df = pd.read_csv(os.path.join(d, "orders.csv"))
+            self.test_orders = orders_df[orders_df['eval_set'] == 'test'][['order_id', 'user_id']]
             
-            self.orders_df = pd.read_csv(
-                os.path.join(d, "orders.csv"),
-                usecols=['order_id', 'user_id', 'order_dow', 'order_hour_of_day', 'days_since_prior_order']
-            )
             print("Data loaded successfully (CPU mode)")
     
-    def get_user_product_features(self) -> pd.DataFrame:
-        """
-        Get user-product features from prior orders.
-        
-        Returns:
-            DataFrame with user-product features
-        """
-        data_config = Config.get_data_config()
-        d = kagglehub.dataset_download(data_config['dataset_name'])
-        prior_path = os.path.join(d, "order_products__prior.csv")
+    def load_test_features(self) -> pd.DataFrame:
+        test_features_path = "features/scaled_test_features.csv"
+        validate_file_path(test_features_path)
         
         if self.use_gpu:
-            order_products = cudf.read_csv(prior_path, 
-                                         usecols=['order_id', 'product_id', 'reordered'])
-            order_products = order_products.merge(
-                self.orders_df[['order_id', 'user_id']], on='order_id'
-            )
-            
-            features_df = order_products.groupby(['user_id', 'product_id']).agg(
-                purchase_count=('order_id', 'count'),
-                ever_reordered=('reordered', 'max')
-            ).reset_index()
-            
-            features_df = features_df.merge(
-                self.product_info[['product_id', 'department', 'aisle']], 
-                on='product_id'
-            )
-            
-            features_df = features_df.to_pandas()
-            print(f"Generated {len(features_df)} user-product pairs (GPU mode)")
+            test_df = cudf.read_csv(test_features_path)
+            test_df = test_df.to_pandas()
+            print(f"Loaded test features (GPU mode): {len(test_df)} samples")
         else:
-            order_products = pd.read_csv(prior_path, 
-                                        usecols=['order_id', 'product_id', 'reordered'])
-            order_products = order_products.merge(
-                self.orders_df[['order_id', 'user_id']], on='order_id'
-            )
-            
-            features_df = order_products.groupby(['user_id', 'product_id']).agg(
-                purchase_count=('order_id', 'count'),
-                ever_reordered=('reordered', 'max')
-            ).reset_index()
-            
-            features_df = features_df.merge(
-                self.product_info[['product_id', 'department', 'aisle']], 
-                on='product_id'
-            )
-            print(f"Generated {len(features_df)} user-product pairs (CPU mode)")
+            test_df = pd.read_csv(test_features_path)
+            print(f"Loaded test features (CPU mode): {len(test_df)} samples")
         
-        return features_df
+        return test_df
     
     
     def prepare_features(self, features_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Prepare features for prediction.
-        
-        Args:
-            features_df: DataFrame with user-product features
-            
-        Returns:
-            DataFrame with features ready for prediction
-        """
         feature_config = Config.get_feature_config()
         
         df = features_df.copy()
@@ -177,20 +117,19 @@ class InstacartPredictor:
         return df[feature_config['numerical_features'] + feature_config['categorical_features']]
     
     def predict(self, features_df: pd.DataFrame, batch_size: int = 10000) -> pd.DataFrame:
-        """
-        Generate predictions in batches to manage memory.
-        
-        Args:
-            features_df: DataFrame with features for prediction
-            batch_size: Size of each batch for prediction
-            
-        Returns:
-            DataFrame with predictions
-        """
         data_config = Config.get_data_config()
         batch_size = batch_size or data_config.get('prediction_batch_size', 10000)
         
-        X = self.prepare_features(features_df)
+        expected_features = ['UP_avg_interval', 'UP_std_interval', 'UP_min_interval', 'UP_max_interval', 
+                           'UP_last_abs_day', 'UP_purchase_count', 'user_last_abs_day', 'user_total_orders', 
+                           'user_avg_days_between_orders', 'target_abs_day', 'UP_days_since_last', 
+                           'UP_days_overdue', 'UP_overdue_zscore', 'UP_interval_progress', 'aisle_id', 
+                           'orders', 'reorders', 'reorder_rate', 'total_items', 'total_distinct_items', 
+                           'average_days_between_orders', 'average_basket', 'nb_orders', 'target_day_offset']
+        
+        feature_columns = [col for col in expected_features if col in features_df.columns]
+        
+        X = features_df[feature_columns]
         predictions = []
         
         for i in range(0, len(X), batch_size):
@@ -225,24 +164,22 @@ class InstacartPredictor:
         print(f"Generated {len(filtered)} predictions above threshold {self.probability_threshold} ({mode} mode)")
         return filtered
     
-    def aggregate_predictions(self, predictions_df: pd.DataFrame) -> pd.DataFrame:
-        """
-        Aggregate predictions to get reorder counts per product.
-        
-        Args:
-            predictions_df: DataFrame with individual predictions
-            
-        Returns:
-            DataFrame with aggregated product counts
-        """
+    def aggregate_predictions(self, predictions_df: pd.DataFrame, features_df: pd.DataFrame) -> pd.DataFrame:
         if hasattr(self.product_info, 'to_pandas'):
             product_info_pd = self.product_info.to_pandas()
         else:
             product_info_pd = self.product_info
+            
+        if hasattr(self.test_orders, 'to_pandas'):
+            test_orders_pd = self.test_orders.to_pandas()
+        else:
+            test_orders_pd = self.test_orders
         
-        result = predictions_df.groupby('product_id').agg(
+        test_user_products = features_df.groupby('product_id').agg(
             count=('user_id', 'nunique')
-        ).reset_index().merge(
+        ).reset_index()
+        
+        result = test_user_products.merge(
             product_info_pd[['product_id', 'product_name']], 
             on='product_id'
         )
@@ -250,12 +187,6 @@ class InstacartPredictor:
         return result[['product_id', 'product_name', 'count']].sort_values('count', ascending=False)
     
     def generate_stock_predictions(self, output_path: str = None) -> None:
-        """
-        Generate stock predictions.
-        
-        Args:
-            output_path: Path to save the output CSV file
-        """
         output_path = output_path or Config.DEFAULT_OUTPUT_PATH
         create_output_directory(output_path)
         
@@ -263,10 +194,10 @@ class InstacartPredictor:
         self.load_model()
         self.load_data()
         
-        features_df = self.get_user_product_features()
+        features_df = self.load_test_features()
         predictions_df = self.predict(features_df)
         
-        stock_df = self.aggregate_predictions(predictions_df)
+        stock_df = self.aggregate_predictions(predictions_df, features_df)
         stock_df.to_csv(output_path, index=False)
         
         print(f"Stock predictions saved to {output_path}")
@@ -276,8 +207,7 @@ class InstacartPredictor:
 
 
 def main():
-    """Main function to run the prediction pipeline."""
-    predictor = InstacartPredictor(use_gpu=True)
+    predictor = InstacartPredictor(use_gpu=True, probability_threshold=0.01)
     predictor.generate_stock_predictions()
 
 
